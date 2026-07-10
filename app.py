@@ -4,16 +4,18 @@ import feedparser
 from flask import Flask, jsonify, render_template, request
 from datetime import datetime
 import re
-import hashlib
 from azure.cosmos import CosmosClient, PartitionKey
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
+from dotenv import load_dotenv
+load_dotenv()
+import hashlib
+
+def sanitize_id(raw_id):
+    # Cosmos DB ids cannot contain / \ ? #
+    # Hash the original id to get a safe, unique, deterministic id
+    return hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
 
 app = Flask(__name__)
-
-def sanitize_id(item_id):
-    if not item_id:
-        return ""
-    return hashlib.sha256(item_id.encode('utf-8')).hexdigest()
 
 FEED_URL = "https://docs.cloud.google.com/feeds/bigquery-release-notes.xml"
 
@@ -140,35 +142,28 @@ def get_releases():
 def star_item():
     try:
         data = request.get_json() or {}
-        item_id = data.get("id")
-        if not item_id:
+        original_id = data.get("id")
+        if not original_id:
             return jsonify({"status": "error", "message": "Missing 'id' in request body."}), 400
-        
-        # Sanitize the id using sha256
-        sanitized_id = sanitize_id(item_id)
-        
-        # Build item to upsert with required fields and add starred_at
+
+        safe_id = sanitize_id(original_id)
+
         item = {
-            "id": sanitized_id,
-            "original_id": item_id,
+            "id": safe_id,
+            "original_id": original_id,
             "title": data.get("title", ""),
             "link": data.get("link", ""),
             "category": data.get("category", "General"),
             "published": data.get("published", ""),
             "starred_at": datetime.utcnow().isoformat() + "Z"
         }
-        
-        # Preserve other fields from data (like 'content', 'date', etc.) if present
+
         for key, val in data.items():
-            if key not in item:
+            if key not in item and key != "id":
                 item[key] = val
-        
-        # Fallback date if not provided
+
         if not item.get("date") and item.get("published"):
             item["date"] = item["published"]
-
-        # Print item["id"] right before upserting to Cosmos DB
-        print(f"Upserting item with ID to Cosmos DB: {item['id']}")
 
         container = get_cosmos_container()
         container.upsert_item(item)
@@ -180,18 +175,12 @@ def star_item():
 @app.route("/api/star/<path:id>", methods=["DELETE"])
 def delete_star(id):
     try:
+        safe_id = sanitize_id(id)
         container = get_cosmos_container()
-        sanitized_id = sanitize_id(id)
-        try:
-            # First try deleting with the sanitized (hashed) id
-            container.delete_item(item=sanitized_id, partition_key=sanitized_id)
-        except CosmosResourceNotFoundError:
-            # Defensive fallback: try deleting with the original raw id (for legacy items)
-            try:
-                container.delete_item(item=id, partition_key=id)
-            except CosmosResourceNotFoundError:
-                return jsonify({"status": "error", "message": f"Item with id '{id}' not found."}), 404
-        return jsonify({"status": "success", "message": f"Item with id '{id}' unstarred successfully."}), 200
+        container.delete_item(item=safe_id, partition_key=safe_id)
+        return jsonify({"status": "success", "message": f"Item unstarred successfully."}), 200
+    except CosmosResourceNotFoundError:
+        return jsonify({"status": "error", "message": f"Item not found."}), 404
     except Exception as e:
         print(f"Error in DELETE /api/star/{id}: {e}")
         return jsonify({"status": "error", "message": f"Cosmos DB Error: {str(e)}"}), 500
@@ -201,14 +190,7 @@ def get_starred_items():
     try:
         container = get_cosmos_container()
         query = "SELECT * FROM c ORDER BY c.starred_at DESC"
-        raw_items = list(container.query_items(query=query, enable_cross_partition_query=True))
-        
-        # Defensive mapping: replace hashed 'id' with the raw 'original_id' so frontend can match
-        items = []
-        for item in raw_items:
-            item["id"] = item.get("original_id", item["id"])
-            items.append(item)
-            
+        items = list(container.query_items(query=query, enable_cross_partition_query=True))
         return jsonify({
             "status": "success",
             "releases": items
@@ -218,5 +200,5 @@ def get_starred_items():
         return jsonify({"status": "error", "message": f"Cosmos DB Error: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    # Allow port reuse, disable automatic debug reloader and run on port 5000
-    app.run(debug=True, use_reloader=False, host="0.0.0.0", port=5000)
+    # Allow port reuse and run on port 5000
+    app.run(debug=True, host="0.0.0.0", port=5000, use_reloader=False)

@@ -373,22 +373,20 @@ async function toggleStar(release) {
     } else {
         // POST /api/star
         try {
-            const payload = {
-                id: release.id,
-                title: release.title,
-                link: release.link,
-                category: release.category,
-                published: release.updated_raw || release.date || '',
-                content: release.content,
-                date: release.date
-            };
-            console.log("Starring item, sending payload to /api/star:", payload);
             const response = await fetch('/api/star', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({
+                    id: release.id,
+                    title: release.title,
+                    link: release.link,
+                    category: release.category,
+                    published: release.updated_raw || release.date || '',
+                    content: release.content,
+                    date: release.date
+                })
             });
             const data = await response.json();
             if (data.status === 'success') {
