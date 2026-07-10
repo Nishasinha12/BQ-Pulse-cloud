@@ -1,5 +1,8 @@
 // State Management
 let allReleases = [];
+let starredReleases = [];
+let starredIds = new Set();
+let currentView = 'feed'; // 'feed' or 'starred'
 let filteredReleases = [];
 let selectedReleaseId = null;
 let currentFilter = 'all';
@@ -12,6 +15,8 @@ const filterTabs = document.querySelectorAll('.filter-tab');
 const refreshBtn = document.getElementById('refreshBtn');
 const refreshIcon = document.getElementById('refreshIcon');
 const retryBtn = document.getElementById('retryBtn');
+const navFeed = document.getElementById('nav-feed');
+const navStarred = document.getElementById('nav-starred');
 
 // Dashboard Counters
 const countFeatures = document.getElementById('countFeatures');
@@ -53,9 +58,9 @@ document.addEventListener('DOMContentLoaded', () => {
 // Event Listeners Setup
 function setupEventListeners() {
     // Refresh button
-    refreshBtn.addEventListener('click', fetchReleases);
+    refreshBtn.addEventListener('click', handleRefresh);
     if (retryBtn) {
-        retryBtn.addEventListener('click', fetchReleases);
+        retryBtn.addEventListener('click', handleRefresh);
     }
 
     // Search bar
@@ -69,10 +74,39 @@ function setupEventListeners() {
         tab.addEventListener('click', () => {
             filterTabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            currentFilter = tab.getAttribute('data-filter');
-            applyFiltersAndSearch();
+            
+            const filter = tab.getAttribute('data-filter');
+            if (filter === 'starred') {
+                currentView = 'starred';
+                navStarred.classList.add('active');
+                navFeed.classList.remove('active');
+                currentFilter = 'all';
+                fetchStarred();
+            } else {
+                if (currentView === 'starred') {
+                    currentView = 'feed';
+                    navFeed.classList.add('active');
+                    navStarred.classList.remove('active');
+                }
+                currentFilter = filter;
+                applyFiltersAndSearch();
+            }
         });
     });
+
+    // Sidebar navigation items
+    if (navFeed) {
+        navFeed.addEventListener('click', (e) => {
+            e.preventDefault();
+            switchView('feed');
+        });
+    }
+    if (navStarred) {
+        navStarred.addEventListener('click', (e) => {
+            e.preventDefault();
+            switchView('starred');
+        });
+    }
 
     // Tweet text area
     tweetTextarea.addEventListener('input', handleTweetInput);
@@ -87,6 +121,92 @@ function setupEventListeners() {
     themeToggleBtn.addEventListener('click', toggleTheme);
 }
 
+// Switch view mode
+async function switchView(view) {
+    currentView = view;
+    
+    if (currentView === 'feed') {
+        navFeed.classList.add('active');
+        navStarred.classList.remove('active');
+        
+        // Reset category tabs to "All"
+        filterTabs.forEach(t => {
+            if (t.getAttribute('data-filter') === 'all') {
+                t.classList.add('active');
+            } else {
+                t.classList.remove('active');
+            }
+        });
+        currentFilter = 'all';
+        await fetchReleases();
+    } else {
+        navStarred.classList.add('active');
+        navFeed.classList.remove('active');
+        
+        // Highlight "Starred" filter tab
+        filterTabs.forEach(t => {
+            if (t.getAttribute('data-filter') === 'starred') {
+                t.classList.add('active');
+            } else {
+                t.classList.remove('active');
+            }
+        });
+        currentFilter = 'all';
+        await fetchStarred();
+    }
+}
+
+// Handle Refresh depending on active view
+function handleRefresh() {
+    if (currentView === 'starred') {
+        fetchStarred();
+    } else {
+        fetchReleases();
+    }
+}
+
+// Fetch starred IDs from Cosmos DB for quick lookup
+async function fetchStarredIds() {
+    try {
+        const response = await fetch('/api/starred');
+        const data = await response.json();
+        if (data.status === 'success') {
+            starredIds = new Set(data.releases.map(r => r.id));
+        }
+    } catch (error) {
+        console.error("Error fetching starred IDs:", error);
+    }
+}
+
+// Fetch all Starred items
+async function fetchStarred() {
+    showState('loading');
+    refreshIcon.classList.add('spinning');
+    refreshBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/starred');
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            starredReleases = data.releases;
+            starredIds = new Set(starredReleases.map(r => r.id));
+            applyFiltersAndSearch();
+            
+            const now = new Date();
+            lastUpdatedDate.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        } else {
+            showError(data.message || 'Failed to fetch starred releases.');
+        }
+    } catch (error) {
+        showError('Network error. Unable to contact local Flask server.');
+        console.error(error);
+    } finally {
+        refreshIcon.classList.remove('spinning');
+        refreshBtn.disabled = false;
+    }
+}
+
 // Fetch Release Notes from API
 async function fetchReleases() {
     showState('loading');
@@ -94,6 +214,8 @@ async function fetchReleases() {
     refreshBtn.disabled = true;
 
     try {
+        await fetchStarredIds();
+
         const response = await fetch('/api/releases');
         const data = await response.json();
 
@@ -153,11 +275,11 @@ function animateCounter(element, target) {
 
 // Apply Search Query and Category Tabs
 function applyFiltersAndSearch() {
-    filteredReleases = allReleases.filter(release => {
-        // Category filter
+    const sourceList = currentView === 'starred' ? starredReleases : allReleases;
+    
+    filteredReleases = sourceList.filter(release => {
         const matchesCategory = currentFilter === 'all' || release.category === currentFilter;
         
-        // Search text filter
         const textContent = (release.title + ' ' + release.content).toLowerCase();
         const matchesSearch = textContent.includes(searchQuery);
         
@@ -186,6 +308,9 @@ function renderReleaseNotes() {
         card.setAttribute('data-id', release.id);
         
         const categoryClass = `tag-${release.category.toLowerCase()}`;
+        const isStarred = starredIds.has(release.id);
+        const starIconClass = isStarred ? 'fa-solid fa-star' : 'fa-regular fa-star';
+        const starClass = isStarred ? 'btn-star starred' : 'btn-star';
         
         card.innerHTML = `
             <div class="card-header">
@@ -193,6 +318,9 @@ function renderReleaseNotes() {
                     <span class="category-tag ${categoryClass}">${release.category}</span>
                     <span class="card-date"><i class="fa-regular fa-calendar-days"></i> ${release.date}</span>
                 </div>
+                <button class="${starClass}" title="${isStarred ? 'Unstar Release' : 'Star Release'}">
+                    <i class="${starIconClass}"></i>
+                </button>
             </div>
             <h3 class="card-title">${release.title || 'General Update'}</h3>
             <div class="card-content">${release.content}</div>
@@ -207,9 +335,78 @@ function renderReleaseNotes() {
         // Click handler to select update for composer
         card.addEventListener('click', () => selectReleaseForTweet(release));
         
+        // Star toggle click handler
+        const starBtn = card.querySelector('.btn-star');
+        starBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleStar(release);
+        });
+        
         notesContainer.appendChild(card);
     });
 }
+
+// Star toggle handler
+async function toggleStar(release) {
+    const isStarred = starredIds.has(release.id);
+    
+    if (isStarred) {
+        // DELETE /api/star/<id>
+        try {
+            const response = await fetch(`/api/star/${encodeURIComponent(release.id)}`, {
+                method: 'DELETE'
+            });
+            const data = await response.json();
+            if (data.status === 'success') {
+                starredIds.delete(release.id);
+                if (currentView === 'starred') {
+                    starredReleases = starredReleases.filter(r => r.id !== release.id);
+                }
+                applyFiltersAndSearch();
+            } else {
+                alert(`Failed to unstar: ${data.message}`);
+            }
+        } catch (error) {
+            console.error('Error unstarring release:', error);
+            alert('Failed to unstar release. Server might be unreachable.');
+        }
+    } else {
+        // POST /api/star
+        try {
+            const payload = {
+                id: release.id,
+                title: release.title,
+                link: release.link,
+                category: release.category,
+                published: release.updated_raw || release.date || '',
+                content: release.content,
+                date: release.date
+            };
+            console.log("Starring item, sending payload to /api/star:", payload);
+            const response = await fetch('/api/star', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            if (data.status === 'success') {
+                starredIds.add(release.id);
+                if (currentView === 'starred') {
+                    starredReleases.push(data.item);
+                }
+                applyFiltersAndSearch();
+            } else {
+                alert(`Failed to star: ${data.message}`);
+            }
+        } catch (error) {
+            console.error('Error starring release:', error);
+            alert('Failed to star release. Server might be unreachable.');
+        }
+    }
+}
+
 
 // Selection logic
 function selectReleaseForTweet(release) {
