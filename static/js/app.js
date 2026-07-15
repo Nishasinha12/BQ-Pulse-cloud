@@ -171,7 +171,7 @@ async function fetchStarredIds() {
         const response = await fetch('/api/starred');
         const data = await response.json();
         if (data.status === 'success') {
-            starredIds = new Set(data.releases.map(r => r.id));
+            starredIds = new Set(data.releases.map(r => r.original_id || r.id));
         }
     } catch (error) {
         console.error("Error fetching starred IDs:", error);
@@ -190,7 +190,7 @@ async function fetchStarred() {
 
         if (data.status === 'success') {
             starredReleases = data.releases;
-            starredIds = new Set(starredReleases.map(r => r.id));
+            starredIds = new Set(starredReleases.map(r => r.original_id || r.id));
             applyFiltersAndSearch();
             
             const now = new Date();
@@ -308,7 +308,7 @@ function renderReleaseNotes() {
         card.setAttribute('data-id', release.id);
         
         const categoryClass = `tag-${release.category.toLowerCase()}`;
-        const isStarred = starredIds.has(release.id);
+        const isStarred = starredIds.has(release.original_id || release.id);
         const starIconClass = isStarred ? 'fa-solid fa-star' : 'fa-regular fa-star';
         const starClass = isStarred ? 'btn-star starred' : 'btn-star';
         
@@ -348,19 +348,20 @@ function renderReleaseNotes() {
 
 // Star toggle handler
 async function toggleStar(release) {
-    const isStarred = starredIds.has(release.id);
+    const releaseId = release.original_id || release.id;
+    const isStarred = starredIds.has(releaseId);
     
     if (isStarred) {
         // DELETE /api/star/<id>
         try {
-            const response = await fetch(`/api/star/${encodeURIComponent(release.id)}`, {
+            const response = await fetch(`/api/star/${encodeURIComponent(releaseId)}`, {
                 method: 'DELETE'
             });
             const data = await response.json();
             if (data.status === 'success') {
-                starredIds.delete(release.id);
+                starredIds.delete(releaseId);
                 if (currentView === 'starred') {
-                    starredReleases = starredReleases.filter(r => r.id !== release.id);
+                    starredReleases = starredReleases.filter(r => (r.original_id || r.id) !== releaseId);
                 }
                 applyFiltersAndSearch();
             } else {
@@ -379,7 +380,7 @@ async function toggleStar(release) {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    id: release.id,
+                    id: releaseId,
                     title: release.title,
                     link: release.link,
                     category: release.category,
@@ -390,7 +391,7 @@ async function toggleStar(release) {
             });
             const data = await response.json();
             if (data.status === 'success') {
-                starredIds.add(release.id);
+                starredIds.add(releaseId);
                 if (currentView === 'starred') {
                     starredReleases.push(data.item);
                 }
