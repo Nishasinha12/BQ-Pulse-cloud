@@ -9,6 +9,8 @@ from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from dotenv import load_dotenv
 load_dotenv()
 import hashlib
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 def sanitize_id(raw_id):
     # Cosmos DB ids cannot contain / \ ? #
@@ -16,6 +18,20 @@ def sanitize_id(raw_id):
     return hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
 
 app = Flask(__name__)
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["100 per hour"],
+    storage_uri="memory://"
+)
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    return jsonify({
+        "status": "error",
+        "message": "Rate limit exceeded. Please try again later."
+    }), 429
 
 FEED_URL = "https://docs.cloud.google.com/feeds/bigquery-release-notes.xml"
 
@@ -65,6 +81,7 @@ def index():
     return render_template("index.html")
 
 @app.route("/api/releases")
+@limiter.limit("60 per minute")
 def get_releases():
     try:
         headers = {
@@ -139,6 +156,7 @@ def get_releases():
         }), 500
 
 @app.route("/api/star", methods=["POST"])
+@limiter.limit("30 per minute")
 def star_item():
     try:
         data = request.get_json() or {}
@@ -173,6 +191,7 @@ def star_item():
         return jsonify({"status": "error", "message": f"Cosmos DB Error: {str(e)}"}), 500
 
 @app.route("/api/star/<path:id>", methods=["DELETE"])
+@limiter.limit("30 per minute")
 def delete_star(id):
     try:
         safe_id = sanitize_id(id)
@@ -186,6 +205,7 @@ def delete_star(id):
         return jsonify({"status": "error", "message": f"Cosmos DB Error: {str(e)}"}), 500
 
 @app.route("/api/starred", methods=["GET"])
+@limiter.limit("60 per minute")
 def get_starred_items():
     try:
         container = get_cosmos_container()

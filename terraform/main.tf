@@ -51,8 +51,9 @@ resource "azurerm_container_app" "app" {
   }
 
   secret {
-    name  = "cosmos-key"
-    value = var.cosmos_key
+    name                = "cosmos-key"
+    key_vault_secret_id = azurerm_key_vault_secret.cosmos_key_secret.versionless_id
+    identity            = azurerm_user_assigned_identity.aca_identity.id
   }
 
   template {
@@ -96,9 +97,39 @@ resource "azurerm_container_app" "app" {
     }
   }
 
-  depends_on = [azurerm_role_assignment.acr_pull]
+  depends_on = [azurerm_role_assignment.acr_pull, azurerm_key_vault.kv]
 }
 
 output "app_url" {
-  value = "https://${azurerm_container_app.app.latest_revision_fqdn}"
+  value = "https://${azurerm_container_app.app.ingress[0].fqdn}"
+}
+
+resource "azurerm_key_vault" "kv" {
+  name                = "bqpulse-kv-nisha"
+  location            = data.azurerm_resource_group.main.location
+  resource_group_name = data.azurerm_resource_group.main.name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  sku_name            = "standard"
+
+  access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = data.azurerm_client_config.current.object_id
+
+    secret_permissions = ["Get", "List", "Set", "Delete", "Purge"]
+  }
+
+  access_policy {
+    tenant_id = azurerm_user_assigned_identity.aca_identity.tenant_id
+    object_id = azurerm_user_assigned_identity.aca_identity.principal_id
+
+    secret_permissions = ["Get", "List"]
+  }
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault_secret" "cosmos_key_secret" {
+  name         = "cosmos-key"
+  value        = var.cosmos_key
+  key_vault_id = azurerm_key_vault.kv.id
 }
